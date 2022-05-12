@@ -1,0 +1,46 @@
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ''
+  DOCKER_DRIVER: overlay2
+
+stages:
+  - docker-build
+  - deploy
+
+docker-build:
+  stage: docker-build
+  only:
+    - release/develop
+    - release/staging
+    - release/production
+  image: docker:latest
+  services:
+    - name: docker:19.03.8-dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - echo "start build"
+    - docker build --pull -t devtools.agifly.cloud:5050/ptf/ptf-pointify-website/ptf_pw_backend:develop .
+    - docker push devtools.agifly.cloud:5050/ptf/ptf-pointify-website/ptf_pw_backend:develop
+
+deployment:
+  stage: deploy
+  only:
+    - release/develop
+    - release/staging
+    - release/production
+  image: alpine:3.12
+  script:
+    - apk update  && apk add --no-cache curl
+    - curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+    - chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl
+    - mkdir -p $HOME/.kube
+    - echo -n $KUBE_CONFIG | base64 -d > $HOME/.kube/config
+    - kubectl config view
+    # create/update the kubernetes resources
+    - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" kubernetes_manifest.yml
+    - kubectl apply -f kubernetes_manifest.yml
+    # Restart the deployment so as to pull the latest version of the container image
+    - kubectl rollout restart deployment/backend-develop
+  environment:
+    name: develop
